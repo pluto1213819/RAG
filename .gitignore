@@ -1,0 +1,27 @@
+﻿# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# ChromaDB data
+chroma_data/
+
+# SQLite
+*.db
+
+# Logs
+*.log
+install_log.txt
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
