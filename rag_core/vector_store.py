@@ -4,6 +4,9 @@ import math
 import os
 import re
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CHROMA_DIR = os.path.join(PROJECT_ROOT, "chroma_data")
+
 
 class TfidfEmbedding:
     def __init__(self, dim: int = 256):
@@ -46,30 +49,52 @@ class TfidfEmbedding:
 
     @staticmethod
     def _tokenize(text: str) -> List[str]:
-        return re.findall(r"[a-z0-9\u4e00-\u9fff]+", text.lower())
+        text = text.lower()
+        chinese = re.findall(r'[\u4e00-\u9fff]+', text)
+        tokens = []
+        for seg in chinese:
+            for ch in seg:
+                tokens.append(ch)
+            for i in range(len(seg) - 1):
+                tokens.append(seg[i:i+2])
+            for i in range(len(seg) - 2):
+                tokens.append(seg[i:i+3])
+        english = re.findall(r'[a-z0-9]+', text)
+        tokens.extend(english)
+        return tokens
 
+
+_ef_instance = None
 
 def _ef():
-    return TfidfEmbedding()
+    global _ef_instance
+    if _ef_instance is None:
+        _ef_instance = TfidfEmbedding()
+    return _ef_instance
 
 
-def _client():
-    chroma_dir = os.getenv("CHROMA_DIR", "chroma_data")
-    return chromadb.PersistentClient(path=chroma_dir)
+_client = None
+
+def _get_client():
+    global _client
+    if _client is None:
+        _client = chromadb.PersistentClient(path=CHROMA_DIR)
+    return _client
 
 
-def collection_name(tenant_id: int) -> str:
-    return f"tenant_{tenant_id}"
+COLLECTION = "knowledge_base"
 
 
-def get_collection(tenant_id: int):
-    return _client().get_or_create_collection(
-        name=collection_name(tenant_id), embedding_function=_ef()
+def get_collection():
+    return _get_client().get_or_create_collection(
+        name=COLLECTION,
+        embedding_function=_ef(),
+        metadata={"hnsw:space": "cosine"}
     )
 
 
-def ingest_texts(tenant_id: int, doc_id: int, texts: List[str], metadata: Dict | None = None):
-    col = get_collection(tenant_id)
+def ingest_texts(doc_id: int, texts: List[str], metadata: Dict | None = None):
+    col = get_collection()
     metadata = metadata or {}
     for i, text in enumerate(texts):
         cid = f"{doc_id}_{i}"
@@ -80,17 +105,18 @@ def ingest_texts(tenant_id: int, doc_id: int, texts: List[str], metadata: Dict |
         )
 
 
-def retrieve(tenant_id: int, query: str, top_k: int = 3):
-    col = get_collection(tenant_id)
+def retrieve(query: str, top_k: int = 3):
+    col = get_collection()
     res = col.query(query_texts=[query], n_results=top_k)
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0] if "distances" in res else []
     out = []
     for idx, (d, m) in enumerate(zip(docs, metas)):
+        score = 1.0 - dists[idx] if idx < len(dists) else 0.0
         out.append({
             "content": d,
             "metadata": m,
-            "score": dists[idx] if idx < len(dists) else None,
+            "score": round(score, 4),
         })
     return out

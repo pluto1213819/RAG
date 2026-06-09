@@ -1,5 +1,5 @@
-﻿from typing import List, Optional
-from pydantic import BaseModel
+﻿from pydantic import BaseModel
+from typing import List, Optional
 
 
 class DocumentCreate(BaseModel):
@@ -10,7 +10,6 @@ class DocumentCreate(BaseModel):
 
 class DocumentRead(BaseModel):
     id: int
-    tenant_id: int
     title: str
     path: str
 
@@ -20,8 +19,7 @@ class DocumentRead(BaseModel):
 
 class QueryRequest(BaseModel):
     query: str
-    top_k: int = 3
-    use_web: bool = False
+    top_k: int = 5
 
 
 class SourceItem(BaseModel):

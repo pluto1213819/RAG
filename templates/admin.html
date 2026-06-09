@@ -1,45 +1,134 @@
 ﻿<!doctype html>
 <html>
 <head>
-  <meta charset="utf-8">
-  <title>RAG Admin</title>
-  <style>body{font-family:Arial;max-width:900px;margin:40px auto}input,button{padding:8px;margin:6px 0}table{width:100%;border-collapse:collapse}td,th{border:1px solid #ddd;padding:6px}</style>
+  <meta charset="UTF-8">
+  <title>RAG Agent</title>
+  <style>
+    body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; color: #333; }
+    h2 { color: #1a1a1a; margin-bottom: 20px; }
+    input, textarea, button { padding: 10px 14px; margin: 4px; border-radius: 6px; border: 1px solid #ddd; font-size: 14px; }
+    button { background: #1a1a1a; color: #fff; border: none; cursor: pointer; font-weight: 600; }
+    button:hover { background: #333; }
+    button.secondary { background: #f2f2f2; color: #333; }
+    pre { background: #f8f8f8; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.6; border: 1px solid #eee; white-space: pre-wrap; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #eee; padding: 8px 12px; text-align: left; font-size: 13px; }
+    th { background: #f8f8f8; }
+    hr { border: none; border-top: 1px solid #eee; margin: 24px 0; }
+    .section { margin-bottom: 20px; }
+    .label { font-weight: 600; margin-bottom: 6px; display: block; color: #555; }
+    .status { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; margin-left: 10px; }
+    .status.ok { background: #e6f7e6; color: #2d8a2d; }
+    .status.err { background: #fde8e8; color: #c0392b; }
+  </style>
 </head>
 <body>
-  <h2>生产化 RAG 管理后台（示例）</h2>
-  <div>
-    <input id="email" placeholder="email" value="owner@example.com">
-    <input id="password" type="password" placeholder="password" value="owner123">
-    <button onclick="login()">登录</button>
-    <span id="token"></span>
-  </div>
-  <hr>
-  <div>
-    <input id="query" placeholder="输入问题" value="什么是 RAG？">
+  <h2>RAG Agent 智能问答平台</h2>
+
+  <div class="section">
+    <span class="label">检索问答</span>
+    <input id="query" placeholder="输入问题" value="Agent 有哪些架构模式？" style="width: 60%;">
     <button onclick="ask()">检索问答</button>
-    <pre id="answer"></pre>
+    <span id="status"></span>
+    <pre id="answer">输入问题，点击检索问答...</pre>
   </div>
+
   <hr>
-  <div>
-    <button onclick="logs()">加载审计日志</button>
-    <table><thead><tr><th>ID</th><th>Action</th><th>Time</th></tr></thead><tbody id="logbody"></tbody></table>
+
+  <div class="section">
+    <span class="label">知识库文档</span>
+    <button class="secondary" onclick="loadDocs()">刷新列表</button>
+    <button class="secondary" onclick="indexAll()">重新索引全部</button>
+    <table>
+      <thead><tr><th>ID</th><th>标题</th><th>路径</th><th>操作</th></tr></thead>
+      <tbody id="docbody"></tbody>
+    </table>
   </div>
+
 <script>
-let TOKEN = "";
-async function login(){
-  const r = await fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:document.getElementById("email").value,password:document.getElementById("password").value})});
-  const j = await r.json(); TOKEN = j.access_token; document.getElementById("token").innerText="已登录";
+function setStatus(text, ok) {
+  var el = document.getElementById("status");
+  el.innerText = text;
+  el.className = "status " + (ok ? "ok" : "err");
 }
-async function ask(){
-  const r = await fetch("/api/docs/query",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+TOKEN},body:JSON.stringify({query:document.getElementById("query").value,top_k:3})});
-  document.getElementById("answer").innerText=JSON.stringify(await r.json(),null,2);
+
+async function ask() {
+  var q = document.getElementById("query").value;
+  document.getElementById("answer").innerText = "检索中...";
+  setStatus("检索中...", false);
+  try {
+    var r = await fetch("/api/query", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({query: q, top_k: 5})
+    });
+    var data = await r.json();
+    if (data.detail) {
+      document.getElementById("answer").innerText = "错误: " + data.detail;
+      setStatus("错误", false);
+      return;
+    }
+    var output = "回答:\n" + data.answer + "\n\n引用来源:\n";
+    data.sources.forEach(function(s, i) {
+      output += "  [" + (i+1) + "] " + s.source + " (score=" + s.score + ")\n";
+      output += "      " + s.content.substring(0, 80) + "...\n";
+    });
+    output += "\n指标:\n";
+    output += "  检索: " + data.metrics.retrieval_count + " 条 → 重排: " + data.metrics.rerank_count + " 条\n";
+    output += "  置信度: " + data.metrics.confidence + " | 最高分: " + data.metrics.max_score;
+    document.getElementById("answer").innerText = output;
+    setStatus("完成", true);
+  } catch(e) {
+    document.getElementById("answer").innerText = "请求失败: " + e.message;
+    setStatus("失败", false);
+  }
 }
-async function logs(){
-  const r = await fetch("/api/admin/audit-logs",{headers:{"Authorization":"Bearer "+TOKEN}});
-  const arr = await r.json();
-  const tb = document.getElementById("logbody"); tb.innerHTML="";
-  arr.forEach(x=>{const tr=document.createElement("tr");tr.innerHTML=`<td>${x.id}</td><td>${x.action}</td><td>${x.created_at}</td>`;tb.appendChild(tr);});
+
+async function loadDocs() {
+  try {
+    var r = await fetch("/api/docs");
+    var arr = await r.json();
+    var tb = document.getElementById("docbody");
+    tb.innerHTML = "";
+    arr.forEach(function(d) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + d.id + "</td><td>" + d.title + "</td><td>" + d.path + "</td><td><button class='secondary' onclick='indexDoc(" + d.id + ")'>索引</button></td>";
+      tb.appendChild(tr);
+    });
+  } catch(e) {
+    console.error(e);
+  }
 }
+
+async function indexDoc(id) {
+  setStatus("索引中...", false);
+  try {
+    var r = await fetch("/api/docs/" + id + "/index", {method: "POST"});
+    var data = await r.json();
+    setStatus("索引完成: " + data.chunks_indexed + " 个片段", true);
+  } catch(e) {
+    setStatus("索引失败", false);
+  }
+}
+
+async function indexAll() {
+  setStatus("批量索引中...", false);
+  try {
+    var r = await fetch("/api/docs");
+    var docs = await r.json();
+    var total = 0;
+    for (var i = 0; i < docs.length; i++) {
+      var r2 = await fetch("/api/docs/" + docs[i].id + "/index", {method: "POST"});
+      var data = await r2.json();
+      total += data.chunks_indexed || 0;
+    }
+    setStatus("全部索引完成: " + total + " 个片段", true);
+  } catch(e) {
+    setStatus("索引失败", false);
+  }
+}
+
+loadDocs();
 </script>
 </body>
 </html>
