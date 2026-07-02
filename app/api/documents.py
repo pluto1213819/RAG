@@ -10,40 +10,40 @@ from app.models import Document
 from app.schemas.documents import DocumentCreate, DocumentRead, QueryRequest, QueryResponse, SourceItem
 from rag_core.vector_store import ingest_texts, retrieve
 from rag_core.reranker import rerank
-from app.services.llm import get_llm_client, get_llm_model
+from app.services import llm as llm_service
 
 router = APIRouter(prefix="/api", tags=["docs"])
 
 RETRIEVAL_TOP_K = 5
 RERANK_TOP_K = 3
 
+DEFAULT_SYSTEM_PROMPT = "你是一个专业的 AI Agent 知识助手。你的回答应该简洁、准确、有条理。"
+
 
 def _build_rag_prompt(query, sources):
     context = ""
     for i, s in enumerate(sources, 1):
         context += f"[来源{i}] {s.content}\n\n"
-    return f"""你是一个专业的 AI 助手。请基于以下检索到的证据，回答用户的问题。
-要求：1. 回答必须基于提供的证据 2. 标注引用来源 3. 结构清晰
-检索到的证据：
-{context}
-用户问题：{query}
-请基于以上证据回答："""
+    return (
+        f"请基于以下检索到的资料，回答用户的问题。\n\n"
+        f"检索到的资料：\n"
+        f"{context}\n"
+        f"用户问题：{query}\n\n"
+        f"回答要求：\n"
+        f"1. 直接回答问题，不要说'根据提供的证据'这类套话\n"
+        f"2. 引用资料内容时用 [来源N] 标注\n"
+        f"3. 如果资料不够全面，可以结合自己的知识补充，但必须区分哪些是资料中的、哪些是补充的\n"
+        f"4. 回答用中文，结构清晰\n\n"
+        f"请回答："
+    )
 
 
 def _generate_answer(query, sources):
+    prompt = _build_rag_prompt(query, sources)
     try:
-        client = get_llm_client()
-        model = get_llm_model()
-        prompt = _build_rag_prompt(query, sources)
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1000,
-        )
-        return response.choices[0].message.content
+        return llm_service.generate(prompt=prompt, system_prompt=DEFAULT_SYSTEM_PROMPT)
     except Exception as e:
-        return "LLM 调用失败: %s" % str(e)
+        return "本地模型调用失败: %s" % str(e)
 
 
 def _get_confidence_footer(max_score):
@@ -85,7 +85,7 @@ def index_doc(doc_id: int, db: Session = Depends(get_db)):
 
 @router.post("/query", response_model=QueryResponse)
 def query_docs(body: QueryRequest, db: Session = Depends(get_db)):
-    # Step 1: 向量检索（召回 5 条）
+    # Step 1: bge-m3 向量检索（召回 5 条）
     results = retrieve(body.query, top_k=RETRIEVAL_TOP_K)
 
     if not results:
@@ -97,7 +97,7 @@ def query_docs(body: QueryRequest, db: Session = Depends(get_db)):
 
     retrieval_count = len(results)
 
-    # Step 2: BM25 + 向量混合重排（取 top 3）
+    # Step 2: bge-m3 向量重排（取 top 3）
     reranked = rerank(body.query, results, top_k=RERANK_TOP_K)
     rerank_count = len(reranked)
 
@@ -111,7 +111,7 @@ def query_docs(body: QueryRequest, db: Session = Depends(get_db)):
     avg_score = sum(scores) / len(scores) if scores else 0
     max_score = max(scores) if scores else 0
 
-    # Step 3: LLM 生成回答
+    # Step 3: qwen2.5:7b 生成回答
     answer = _generate_answer(body.query, sources)
 
     # Step 4: 置信度提示
@@ -132,11 +132,13 @@ def query_docs(body: QueryRequest, db: Session = Depends(get_db)):
         metrics={
             "step": "completed",
             "llm_generated": True,
+            "llm_model": llm_service.get_llm_model(),
+            "embed_model": "bge-m3",
             "confidence": confidence_level,
             "retrieval_count": retrieval_count,
             "rerank_count": rerank_count,
             "evidence_count": len(sources),
             "avg_score": round(avg_score, 4),
-            "max_score": round(max_score, 4)
+            "max_score": round(max_score, 4),
         }
     )

@@ -1,79 +1,59 @@
-﻿from typing import List, Dict, Union
+﻿"""向量存储：用 Ollama bge-m3 生成 1024 维嵌入"""
 import chromadb
-import math
 import os
-import re
+import requests
+from typing import List, Dict
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CHROMA_DIR = os.path.join(PROJECT_ROOT, "chroma_data")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
+CHROMA_DIR = os.getenv("CHROMA_DIR", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "chroma_data"))
 
 
-class TfidfEmbedding:
-    def __init__(self, dim: int = 256):
-        self.dim = dim
-        self.vocab: Dict[str, int] = {}
+class OllamaEmbedding:
+    """通过 Ollama API 调用 bge-m3 生成嵌入向量"""
+
+    def __init__(self, model: str = EMBED_MODEL):
+        self.model = model
 
     def name(self) -> str:
-        return "tfidf-lite"
+        return f"ollama-{self.model}"
 
     def __call__(self, input: List[str]) -> List[List[float]]:
         return self.embed(input)
 
     def embed(self, input: List[str]) -> List[List[float]]:
-        tokens_list = [self._tokenize(text) for text in input]
-        all_tokens = set()
-        for tokens in tokens_list:
-            all_tokens.update(tokens)
-        self.vocab = {t: i % self.dim for i, t in enumerate(sorted(all_tokens))}
         results = []
-        for tokens in tokens_list:
-            vec = [0.0] * self.dim
-            tf = {}
-            for t in tokens:
-                tf[t] = tf.get(t, 0) + 1
-            for t, count in tf.items():
-                if t in self.vocab:
-                    vec[self.vocab[t]] = 1.0 + math.log(count)
-            norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-            vec = [v / norm for v in vec]
-            results.append(vec)
+        for text in input:
+            resp = requests.post(
+                f"{OLLAMA_URL}/api/embeddings",
+                json={"model": self.model, "prompt": text},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            results.append(resp.json()["embedding"])
         return results
 
     def embed_documents(self, input: List[str]) -> List[List[float]]:
         return self.embed(input)
 
-    def embed_query(self, input: Union[str, List[str]]) -> List[List[float]]:
+    def embed_query(self, input) -> List[List[float]]:
         if isinstance(input, list):
             input = input[0]
         return self.embed([input])
 
-    @staticmethod
-    def _tokenize(text: str) -> List[str]:
-        text = text.lower()
-        chinese = re.findall(r'[\u4e00-\u9fff]+', text)
-        tokens = []
-        for seg in chinese:
-            for ch in seg:
-                tokens.append(ch)
-            for i in range(len(seg) - 1):
-                tokens.append(seg[i:i+2])
-            for i in range(len(seg) - 2):
-                tokens.append(seg[i:i+3])
-        english = re.findall(r'[a-z0-9]+', text)
-        tokens.extend(english)
-        return tokens
-
 
 _ef_instance = None
+
 
 def _ef():
     global _ef_instance
     if _ef_instance is None:
-        _ef_instance = TfidfEmbedding()
+        _ef_instance = OllamaEmbedding()
     return _ef_instance
 
 
 _client = None
+
 
 def _get_client():
     global _client

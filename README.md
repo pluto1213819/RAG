@@ -1,35 +1,34 @@
-﻿# TrustRAG — 生产化 RAG 智能问答平台
+﻿# TrustRAG — 纯本地 RAG 智能问答平台
 
-面向 **AI Agent 开发** 岗位的面试项目，展示完整的 RAG（检索增强生成）流程。
+完全基于本地模型运行，**不需要任何外部 API**。嵌入用 bge-m3，生成用 qwen2.5:7b，全部通过 Ollama 在本地执行。
 
 ## 技术栈
 
-| 组件 | 技术 | 作用 |
+| 组件 | 技术 | 说明 |
 |------|------|------|
 | Web 框架 | **FastAPI** | REST API、管理后台、依赖注入 |
-| 文档存储 | **SQLite + SQLAlchemy** | 文档元数据持久化 |
 | 向量数据库 | **ChromaDB** | 文档片段向量存储与相似度检索 |
-| 嵌入模型 | **TF-IDF（自实现）** | 中文 n-gram 分词 + TF-IDF 向量化 |
-| 重排序 | **BM25 + 余弦混合** | 关键词匹配与向量相似度融合 |
-| LLM | **DeepSeek** | 基于检索证据生成回答 |
+| 嵌入模型 | **bge-m3（Ollama）** | 1024 维向量，交叉余弦重排 |
+| 生成模型 | **qwen2.5:7b（Ollama）** | 基于检索证据生成回答 |
+| 元数据存储 | **SQLite + SQLAlchemy** | 文档元数据持久化 |
 
 ## RAG 完整流程
 
 ```
-用户提问
-  │
-  ▼
-① 向量检索（ChromaDB, top_k=5）
-  │  TF-IDF 中文分词 → 余弦相似度召回
-  ▼
-② 混合重排（BM25 40% + 余弦 60%, top_k=3）
-  │  关键词匹配 + 向量分数融合
-  ▼
-③ LLM 生成（DeepSeek）
-  │  基于 3 条证据生成结构化回答
-  ▼
-④ 置信度标注
-   根据最高分判定 high / medium / low / very_low
+用户提问 → bge-m3 向量化（Ollama）
+         → ChromaDB 余弦检索（top 5）
+         → bge-m3 交叉余弦重排（top 3）
+         → qwen2.5:7b 基于 3 条证据生成回答
+         → 置信度标注（high/medium/low/very_low）
+```
+
+## 前置条件
+
+安装 [Ollama](https://ollama.com/download/windows) 并拉取模型：
+
+```bash
+ollama pull bge-m3
+ollama pull qwen2.5:7b
 ```
 
 ## 快速启动
@@ -38,17 +37,13 @@
 # 1. 安装依赖
 pip install -r requirements.txt
 
-# 2. 配置 .env
-cp .env.example .env
-# 编辑 .env，填入 DEEPSEEK_API_KEY
-
-# 3. 索引知识库文档
+# 2. 索引知识库文档
 python scripts/index_all.py
 
-# 4. 启动服务
+# 3. 启动服务
 python run_server.py
 
-# 5. 打开浏览器
+# 4. 打开浏览器
 # http://127.0.0.1:8000
 ```
 
@@ -56,6 +51,7 @@ python run_server.py
 
 ```bash
 docker-compose up -d
+# 通过 host.docker.internal 访问宿主机的 Ollama 服务
 ```
 
 ## 项目结构
@@ -67,18 +63,18 @@ RAG/
 │   ├── db.py                # 数据库连接
 │   ├── models.py            # SQLAlchemy 模型
 │   ├── api/documents.py     # 核心 API（索引、查询、重排、LLM）
-│   └── services/llm.py      # DeepSeek 客户端
+│   └── services/llm.py      # 本地 qwen2.5:7b 客户端
 ├── rag_core/
-│   ├── vector_store.py      # ChromaDB 向量存储 + TF-IDF 嵌入
-│   └── reranker.py          # BM25 + 余弦混合重排
+│   ├── vector_store.py      # ChromaDB + bge-m3 嵌入 + 检索
+│   └── reranker.py          # bge-m3 交叉余弦重排
 ├── templates/
 │   ├── admin.html           # 管理后台 UI
 │   └── *.md                 # Agent 知识库文档（6 篇）
 ├── scripts/
-│   ├── index_all.py         # 批量索引脚本
-│   └── test_*.py            # 测试脚本
+│   └── index_all.py         # 批量索引脚本
 ├── .env                     # 环境配置
 ├── requirements.txt
+├── Dockerfile
 ├── docker-compose.yml
 └── run_server.py
 ```
@@ -96,8 +92,8 @@ RAG/
 
 ## 面试展示要点
 
+- **纯本地运行**：零外部 API 依赖，bge-m3 + qwen2.5:7b 全本地
 - **完整 RAG 链路**：向量检索 → 混合重排 → LLM 生成 → 置信度评估
-- **自实现嵌入**：TF-IDF 中文分词，不依赖外部 embedding API
-- **混合重排**：BM25 关键词匹配 + 向量余弦相似度融合
-- **置信度机制**：根据检索分数自动标注回答可信度
+- **专业嵌入**：bge-m3 1024 维，中文语义理解远超 TF-IDF
 - **证据溯源**：每条回答附带引用来源和相似度分数
+- **置信度机制**：根据检索分数自动标注回答可信度
